@@ -1,0 +1,4 @@
+# Dependencias del simulador de línea de embalaje
+# Fijamos pymodbus 3.7.x: API clásica estable y fácil de aprender.
+# (pymodbus 3.15 cambió mucho la API del datastore)
+pymodbus==3.7.4
