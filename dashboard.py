@@ -86,8 +86,9 @@ def obtener_historial_db(limit: int = 50) -> pd.DataFrame:
         conn = sqlite3.connect(DB_PATH)
         df = pd.read_sql_query(
             f"""
-            SELECT timestamp, st_llen, st_etiq, st_palet,
-                   cnt_llen, cnt_palet, pulmon_1, pulmon_2, pulmon_3, velocidad_bph
+            SELECT timestamp, st_llenadora, st_etiq, st_palet,
+                   cnt_llenadora, cnt_paletizadora,
+                   pulmon_1, pulmon_2, pulmon_3
             FROM registros_planta
             ORDER BY id DESC LIMIT {int(limit)}
             """,
@@ -197,7 +198,9 @@ df = obtener_historial_db()
 if not df.empty:
     chart_df = df.iloc[::-1].copy()
     st.line_chart(
-        chart_df.set_index("timestamp")[["pulmon_1", "pulmon_2", "pulmon_3", "cnt_llen"]]
+        chart_df.set_index("timestamp")[
+            ["pulmon_1", "pulmon_2", "pulmon_3", "cnt_llenadora"]
+        ]
     )
     with st.expander("Últimos registros"):
         st.dataframe(df, use_container_width=True)

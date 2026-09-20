@@ -3,8 +3,10 @@
 venv/
 env/
 
-# Base de datos SQLite generada en runtime
+# Bases de datos SQLite generadas en runtime
 embalaje.db
+embalaje_completo.db
+*.db
 *.db-journal
 
 # Python

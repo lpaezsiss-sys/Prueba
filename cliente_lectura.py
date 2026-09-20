@@ -17,7 +17,7 @@ import time
 
 from pymodbus.client import ModbusTcpClient
 
-from base_datos import init_db, guardar_lectura_planta
+from base_datos import init_db, guardar_lectura_completa
 
 # ==============================================================================
 # CONFIGURACIÓN DE CONEXIÓN (cambia esto para el PLC Delta físico)
@@ -82,21 +82,16 @@ def leer_plc() -> None:
                     f"{p1:>4} {p2:>4} {p3:>4} | {cnt_llen:>6} {cnt_palet:>5} | {bph:>5}"
                 )
 
-                guardar_lectura_planta(
-                    st_desp,
+                # Persistencia (esquema embalaje_completo.db)
+                guardar_lectura_completa(
                     st_llen,
                     st_etiq,
-                    st_encaj,
                     st_palet,
-                    falla_etiq,
-                    falla_palet,
-                    cnt_desp,
-                    cnt_llen,
-                    cnt_palet,
                     p1,
                     p2,
                     p3,
-                    bph,
+                    cnt_llen,
+                    cnt_palet,
                 )
 
             time.sleep(INTERVALO_LECTURA_S)
