@@ -275,29 +275,29 @@ def crear_grafico_mimico(coils: list, registers: list) -> go.Figure:
     )
     fill_p, border_p, tag_p = _estado_isa_estacion(st_palet, falla=falla_palet)
 
-    # Geometría del mímico (coordenadas normalizadas)
-    # Estaciones centradas en X; cinta a Y≈10; tanques de pulmón encima de la cinta
+    # Geometría compacta para que quepan 5 estaciones + 3 tanques sin recorte
+    #   Desp──P1──Llen──P2──Etiq────Encaj──P3──Palet
     estaciones = [
-        {"name": "Despaletizador", "x": 8, "fill": fill_d, "border": border_d, "tag": tag_d, "critica": False},
-        {"name": "Llenadora", "x": 30, "fill": fill_l, "border": border_l, "tag": tag_l, "critica": True},
-        {"name": "Etiquetadora", "x": 52, "fill": fill_e, "border": border_e, "tag": tag_e, "critica": False},
-        {"name": "Encajonadora", "x": 70, "fill": fill_c, "border": border_c, "tag": tag_c, "critica": False},
-        {"name": "Paletizadora", "x": 90, "fill": fill_p, "border": border_p, "tag": tag_p, "critica": False},
+        {"name": "Despaletizador", "x": 9, "fill": fill_d, "border": border_d, "tag": tag_d, "critica": False},
+        {"name": "Llenadora", "x": 29, "fill": fill_l, "border": border_l, "tag": tag_l, "critica": True},
+        {"name": "Etiquetadora", "x": 49, "fill": fill_e, "border": border_e, "tag": tag_e, "critica": False},
+        {"name": "Encajonadora", "x": 69, "fill": fill_c, "border": border_c, "tag": tag_c, "critica": False},
+        {"name": "Paletizadora", "x": 89, "fill": fill_p, "border": border_p, "tag": tag_p, "critica": False},
     ]
-    w_est, h_est, y_est = 10.5, 8.5, 7.0
+    w_est, h_est, y_est = 9.0, 8.0, 6.5
 
     # Segmentos de cinta: activo si la estación aguas arriba está ON
     cintas = [
-        {"x0": 13.5, "x1": 24.5, "activo": st_desp},          # Desp -> P1/Llen
-        {"x0": 35.5, "x1": 46.5, "activo": st_llen},          # Llen -> P2/Etiq
-        {"x0": 57.5, "x1": 64.5, "activo": st_etiq},          # Etiq -> Encaj
-        {"x0": 75.5, "x1": 84.5, "activo": st_encaj},         # Encaj -> P3/Palet
+        {"x0": 13.8, "x1": 24.2, "activo": st_desp},   # Desp -> Llen (vía P1)
+        {"x0": 33.8, "x1": 44.2, "activo": st_llen},   # Llen -> Etiq (vía P2)
+        {"x0": 53.8, "x1": 64.2, "activo": st_etiq},   # Etiq -> Encaj
+        {"x0": 73.8, "x1": 84.2, "activo": st_encaj},  # Encaj -> Palet (vía P3)
     ]
 
     pulmones = [
         {"label": "P1", "titulo": "Pulmón 1", "x": 19.0, "nivel": p1},
-        {"label": "P2", "titulo": "Pulmón 2", "x": 41.0, "nivel": p2},
-        {"label": "P3", "titulo": "Pulmón 3", "x": 80.0, "nivel": p3},
+        {"label": "P2", "titulo": "Pulmón 2", "x": 39.0, "nivel": p2},
+        {"label": "P3", "titulo": "Pulmón 3", "x": 79.0, "nivel": p3},
     ]
 
     shapes: list[dict[str, Any]] = []
@@ -391,8 +391,8 @@ def crear_grafico_mimico(coils: list, registers: list) -> go.Figure:
             )
         )
 
-    # Pulmones = tanques verticales con nivel dinámico
-    tank_w, tank_h, tank_y0 = 4.2, 10.0, 12.5
+    # Pulmones = tanques verticales con nivel dinámico (siempre visibles, incluso al 0%)
+    tank_w, tank_h, tank_y0 = 5.0, 11.0, 12.2
     for pul in pulmones:
         x0 = pul["x"] - tank_w / 2
         x1 = pul["x"] + tank_w / 2
@@ -408,43 +408,57 @@ def crear_grafico_mimico(coils: list, registers: list) -> go.Figure:
                 x1=x1,
                 y0=y0,
                 y1=y1,
-                fillcolor="#0b1220",
-                line=dict(color="#9ca3af", width=2),
+                fillcolor="#020617",
+                line=dict(color="#e5e7eb", width=2),
                 layer="above",
             )
         )
-        # Nivel líquido
-        if fill_h > 0:
+        # Marcas de escala 60% / 85%
+        for pct, col in ((60, "#22c55e"), (85, "#ef4444")):
+            yy = y0 + tank_h * (pct / 100.0)
             shapes.append(
                 dict(
-                    type="rect",
-                    x0=x0 + 0.15,
-                    x1=x1 - 0.15,
-                    y0=y0 + 0.15,
-                    y1=y0 + 0.15 + fill_h,
-                    fillcolor=color_pulmon(nivel),
-                    line=dict(width=0),
+                    type="line",
+                    x0=x0,
+                    x1=x1,
+                    y0=yy,
+                    y1=yy,
+                    line=dict(color=col, width=1, dash="dot"),
                     layer="above",
                 )
             )
+        # Nivel líquido (mínimo visual de 2% para que el tanque se note vacío)
+        visible_h = max(fill_h, tank_h * 0.02)
+        shapes.append(
+            dict(
+                type="rect",
+                x0=x0 + 0.2,
+                x1=x1 - 0.2,
+                y0=y0 + 0.2,
+                y1=y0 + 0.2 + visible_h,
+                fillcolor=color_pulmon(nivel) if nivel > 0 else "#1f2937",
+                line=dict(width=0),
+                layer="above",
+            )
+        )
         # Etiqueta % encima del tanque
         annotations.append(
             dict(
                 x=pul["x"],
-                y=y1 + 1.0,
+                y=y1 + 1.1,
                 text=f"<b>{pul['label']} {nivel}%</b>",
                 showarrow=False,
-                font=dict(size=12, color=color_pulmon(nivel)),
+                font=dict(size=13, color=color_pulmon(nivel) if nivel > 0 else "#e5e7eb"),
                 xanchor="center",
             )
         )
         annotations.append(
             dict(
                 x=pul["x"],
-                y=y1 + 2.3,
+                y=y1 + 2.5,
                 text=pul["titulo"],
                 showarrow=False,
-                font=dict(size=10, color="#9ca3af"),
+                font=dict(size=10, color="#d1d5db"),
                 xanchor="center",
             )
         )
@@ -472,7 +486,7 @@ def crear_grafico_mimico(coils: list, registers: list) -> go.Figure:
     fig.add_trace(
         go.Scatter(
             x=[0, 100],
-            y=[0, 28],
+            y=[0, 30],
             mode="markers",
             marker=dict(size=1, opacity=0),
             hoverinfo="skip",
@@ -482,26 +496,30 @@ def crear_grafico_mimico(coils: list, registers: list) -> go.Figure:
     fig.update_layout(
         shapes=shapes,
         annotations=annotations,
-        height=420,
-        margin=dict(l=10, r=10, t=20, b=10),
+        height=460,
+        margin=dict(l=8, r=8, t=16, b=8),
         paper_bgcolor="#111827",
         plot_bgcolor="#1e1e1e",
         font=dict(color="#e5e7eb"),
+        autosize=True,
         xaxis=dict(
             range=[0, 100],
             visible=False,
             showgrid=False,
             zeroline=False,
             fixedrange=True,
+            constrain="domain",
         ),
         yaxis=dict(
-            range=[0, 28],
+            range=[0, 30],
             visible=False,
             showgrid=False,
             zeroline=False,
             fixedrange=True,
+            constrain="domain",
         ),
         dragmode=False,
+        uirevision="mimico-planta",
     )
     return fig
 
