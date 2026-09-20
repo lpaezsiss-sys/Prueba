@@ -2,3 +2,7 @@
 # Fijamos pymodbus 3.7.x: API clásica estable y fácil de aprender.
 # (pymodbus 3.15 cambió mucho la API del datastore)
 pymodbus==3.7.4
+
+# Dashboard web (paso 3)
+streamlit>=1.28.0,<2
+pandas>=2.0.0,<3

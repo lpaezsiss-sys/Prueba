@@ -10,7 +10,7 @@ simulamos el PLC con un servidor Modbus TCP en Python.
 |------|-------------------------|-------------------------|---------------|
 | 1    | Servidor Modbus TCP     | `servidor_simulado.py`  | **Listo**     |
 | 2    | Cliente de lectura      | `cliente_lectura.py`    | **Listo**     |
-| 3    | Dashboard web           | `dashboard.py`          | Pendiente     |
+| 3    | Dashboard web           | `dashboard.py`          | **Listo**     |
 | 4    | Persistencia SQLite     | `base_datos.py`         | **Listo**     |
 
 ---
@@ -169,6 +169,33 @@ Detener el cliente: `Ctrl+C`.
 
 ---
 
+## Paso 3 — Dashboard web (`dashboard.py`)
+
+Panel Streamlit en tiempo real: motor, piezas, alarma, botonera HMI y gráfica.
+
+### Orden de arranque (3 terminales)
+
+```bash
+# Terminal 1 — PLC simulado
+python servidor_simulado.py
+
+# Terminal 2 — cliente que llena embalaje.db
+python cliente_lectura.py
+
+# Terminal 3 — dashboard
+streamlit run dashboard.py --server.port 8501
+```
+
+Abre el navegador en `http://localhost:8501`.
+
+- **ARRANCAR / PARAR** escriben coils 2 / 3 por Modbus TCP
+- Los indicadores leen el último registro de `embalaje.db` (por eso hace falta el cliente)
+- Auto-actualización cada ~1.5 s
+
+Para PLC Delta real: cambia `PLC_IP` / `PLC_PORT` al inicio de `dashboard.py`.
+
+---
+
 ## Paso 4 — Persistencia SQLite (`base_datos.py`)
 
 Guarda cada lectura (timestamp, motor, contador, alarma) en `embalaje.db`.
@@ -192,6 +219,11 @@ Se crea `embalaje.db` en la carpeta del proyecto (está en `.gitignore`).
 
 ---
 
-## Próximo paso (cuando confirmes)
+## Proyecto completo
 
-**Paso 3:** `dashboard.py` — panel web en tiempo real (motor, piezas, alarma).
+Con los 4 archivos listos, el flujo local es:
+
+`servidor_simulado.py` → `cliente_lectura.py` → `embalaje.db` → `dashboard.py`
+
+Cuando tengas el PLC Delta, apaga el servidor simulado y apunta cliente + dashboard
+a la IP/puerto reales.
