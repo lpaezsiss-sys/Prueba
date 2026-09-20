@@ -107,10 +107,16 @@ def badge_maquina(nombre: str, on: bool) -> None:
 
 
 def barra_pulmon(nombre: str, nivel: int) -> None:
+    nivel = int(min(100, max(0, nivel)))
     st.markdown(f"**{nombre}** — {nivel}%")
-    st.progress(min(100, max(0, int(nivel))) / 100.0)
+    st.progress(nivel / 100.0)
+    # Estado explícito en cada refresh (evita sensación de aviso “pegado”)
     if nivel >= 90:
         st.warning("Saturación ≥ 90% (interlock activo)")
+    elif nivel >= 70:
+        st.info("Nivel alto — vigilar acumulación")
+    else:
+        st.caption("Nivel normal")
 
 
 # ------------------------------------------------------------------------------
