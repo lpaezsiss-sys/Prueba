@@ -3,14 +3,12 @@
 """
 cliente_lectura.py
 ------------------
-Cliente Modbus TCP: lectura periódica + logging en consola + persistencia SQLite.
+Cliente Modbus TCP para la planta completa (3 pulmones).
 
-Este script es el "puente" entre el PLC (simulado o real) y el resto del sistema
-(base de datos, y más adelante el dashboard).
+Lee cada 1 s estados, pulmones, contadores y BPH; imprime en consola
+y guarda en SQLite.
 
-IMPORTANTE para el PLC Delta físico:
-  Solo debes cambiar PLC_IP y PLC_PORT (y SLAVE_ID si aplica).
-  La lógica de lectura / impresión / guardado NO cambia.
+Para el PLC Delta real: cambia solo PLC_IP / PLC_PORT / SLAVE_ID.
 """
 
 from __future__ import annotations
@@ -19,76 +17,92 @@ import time
 
 from pymodbus.client import ModbusTcpClient
 
-from base_datos import init_db, guardar_lectura
+from base_datos import init_db, guardar_lectura_planta
 
 # ==============================================================================
-# CONFIGURACIÓN DE CONEXIÓN
-# Para conectar con el PLC Delta real en el futuro, cambia estas variables:
+# CONFIGURACIÓN DE CONEXIÓN (cambia esto para el PLC Delta físico)
 # ==============================================================================
-PLC_IP = "127.0.0.1"  # IP del PLC (o del simulador en tu PC)
-PLC_PORT = 5020       # 5020 = simulador | 502 = típico PLC Delta real
-SLAVE_ID = 1          # Unit / Slave ID Modbus (en Delta suele ser 1)
+PLC_IP = "127.0.0.1"
+PLC_PORT = 5020  # 5020 simulador | 502 PLC Delta típico
+SLAVE_ID = 1
+INTERVALO_LECTURA_S = 1.0
 
-# Mapa de direcciones (debe coincidir con servidor_simulado.py / PLC)
-ADDR_MOTOR = 0
-ADDR_ALARMA = 1
-# Coils 2 y 3 son botones (arranque/paro); aquí solo leemos estado de proceso
-ADDR_CONTADOR = 0
-
-INTERVALO_LECTURA_S = 1.0  # Periodo de muestreo (segundos)
-
-# Inicializar base de datos (crea la tabla si no existe)
 init_db()
 
 
+def _on_off(v: bool) -> str:
+    return "ON" if v else "--"
+
+
 def leer_plc() -> None:
-    """
-    Conecta por Modbus TCP, lee variables cada segundo e imprime + guarda.
-    """
-    # Instancia del cliente Modbus TCP (misma clase sirve para simulador y PLC real)
     client = ModbusTcpClient(PLC_IP, port=PLC_PORT)
 
-    print(f"[CLIENTE] Conectando a PLC en {PLC_IP}:{PLC_PORT}...")
+    print(f"[CLIENTE] Conectando a planta en {PLC_IP}:{PLC_PORT}...")
     if not client.connect():
-        print("[CLIENTE] Error: No se pudo establecer conexión con el PLC/Simulador.")
-        print("[CLIENTE] ¿Está corriendo 'python servidor_simulado.py' en otra terminal?")
+        print("[CLIENTE] Error: no hay conexión. ¿Corriste servidor_simulado.py?")
         return
 
-    print("[CLIENTE] Conexión establecida. Iniciando lectura continua (Ctrl+C para detener)...\n")
-    print(f"{'TIMESTAMP':<20} | {'MOTOR':<8} | {'ALARMA':<8} | {'PIEZAS':<8}")
-    print("-" * 55)
+    print("[CLIENTE] Conexión OK. Lectura continua (Ctrl+C para detener).\n")
+    print(
+        f"{'TIMESTAMP':<19} | {'D':^3} {'L':^3} {'E':^3} {'C':^3} {'P':^3} | "
+        f"{'P1%':>4} {'P2%':>4} {'P3%':>4} | {'LLEN':>6} {'PAL':>5} | {'BPH':>5}"
+    )
+    print("-" * 78)
 
     try:
         while True:
-            # 1) Leer coils 0..3 (fx=01): motor, alarma, arranque, paro
-            res_coils = client.read_coils(address=0, count=4, slave=SLAVE_ID)
+            res_coils = client.read_coils(address=0, count=12, slave=SLAVE_ID)
+            res_regs = client.read_holding_registers(address=0, count=21, slave=SLAVE_ID)
 
-            # 2) Leer holding register 0 (fx=03): contador_piezas
-            res_registers = client.read_holding_registers(
-                address=ADDR_CONTADOR, count=1, slave=SLAVE_ID
-            )
-
-            if not res_coils.isError() and not res_registers.isError():
-                motor_encendido = bool(res_coils.bits[ADDR_MOTOR])
-                alarma_activa = bool(res_coils.bits[ADDR_ALARMA])
-                contador_piezas = int(res_registers.registers[0])
-
-                # Estado visual en consola
-                str_motor = "ON" if motor_encendido else "OFF"
-                str_alarma = "ALERTA" if alarma_activa else "OK"
-                ts = time.strftime("%Y-%m-%d %H:%M:%S")
-
-                print(f"{ts:<20} | {str_motor:<8} | {str_alarma:<8} | {contador_piezas:<8}")
-
-                # Persistencia en SQLite (módulo base_datos.py)
-                guardar_lectura(motor_encendido, contador_piezas, alarma_activa)
+            if res_coils.isError() or res_regs.isError():
+                print("[CLIENTE] Error al leer Modbus.")
             else:
-                print("[CLIENTE] Error al leer registros Modbus.")
+                bits = res_coils.bits
+                regs = res_regs.registers
+
+                st_desp = bool(bits[0])
+                st_llen = bool(bits[1])
+                st_etiq = bool(bits[2])
+                st_encaj = bool(bits[3])
+                st_palet = bool(bits[4])
+                falla_etiq = bool(bits[10])
+                falla_palet = bool(bits[11])
+
+                cnt_desp = int(regs[0])
+                cnt_llen = int(regs[1])
+                cnt_palet = int(regs[2])
+                p1, p2, p3 = int(regs[10]), int(regs[11]), int(regs[12])
+                bph = int(regs[20])
+
+                ts = time.strftime("%Y-%m-%d %H:%M:%S")
+                print(
+                    f"{ts:<19} | "
+                    f"{_on_off(st_desp):^3} {_on_off(st_llen):^3} {_on_off(st_etiq):^3} "
+                    f"{_on_off(st_encaj):^3} {_on_off(st_palet):^3} | "
+                    f"{p1:>4} {p2:>4} {p3:>4} | {cnt_llen:>6} {cnt_palet:>5} | {bph:>5}"
+                )
+
+                guardar_lectura_planta(
+                    st_desp,
+                    st_llen,
+                    st_etiq,
+                    st_encaj,
+                    st_palet,
+                    falla_etiq,
+                    falla_palet,
+                    cnt_desp,
+                    cnt_llen,
+                    cnt_palet,
+                    p1,
+                    p2,
+                    p3,
+                    bph,
+                )
 
             time.sleep(INTERVALO_LECTURA_S)
 
     except KeyboardInterrupt:
-        print("\n[CLIENTE] Lectura detenida por el usuario.")
+        print("\n[CLIENTE] Lectura detenida.")
     finally:
         client.close()
         print("[CLIENTE] Conexión cerrada.")

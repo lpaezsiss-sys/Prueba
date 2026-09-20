@@ -3,23 +3,14 @@
 """
 base_datos.py
 -------------
-Persistencia SQLite de las lecturas del PLC (simulado o real).
+Persistencia SQLite de lecturas de la planta completa (3 pulmones).
 
-Cada lectura guarda:
-  - timestamp        -> cuándo se leyó
-  - motor_encendido  -> estado del motor
-  - contador_piezas  -> piezas acumuladas
-  - alarma_activa    -> si había alarma
-
-Este módulo NO habla Modbus: solo recibe valores ya leídos por el cliente
-y los guarda. Así puedes reutilizarlo igual con el simulador o con el PLC Delta.
-
-Uso típico (desde cliente_lectura.py o dashboard.py):
-
-    from base_datos import init_db, guardar_lectura
-
-    init_db()  # una vez al arrancar
-    guardar_lectura(motor_encendido=True, contador_piezas=12, alarma_activa=False)
+Tabla: registros_planta
+  - estados de las 5 máquinas
+  - fallas comandadas
+  - contadores
+  - niveles de pulmones (%)
+  - velocidad BPH
 """
 
 from __future__ import annotations
@@ -29,31 +20,49 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-# ---------------------------------------------------------------------------
-# CONFIGURACIÓN
-# ---------------------------------------------------------------------------
-# El archivo .db se crea en la misma carpeta del proyecto.
-# (Más adelante puedes cambiarlo a una ruta absoluta si quieres.)
 DB_NAME = "embalaje.db"
 DB_PATH = Path(__file__).resolve().parent / DB_NAME
 
 
 def _conectar() -> sqlite3.Connection:
-    """Abre una conexión a SQLite (una por operación, patrón simple y seguro)."""
     return sqlite3.connect(DB_PATH)
 
 
 def init_db() -> None:
-    """
-    Crea la tabla de registros si no existe.
-
-    Llámalo una vez al iniciar el cliente o el dashboard.
-    Es idempotente: si la tabla ya existe, no hace nada destructivo.
-    """
+    """Crea la tabla de planta completa si no existe."""
     conn = _conectar()
     try:
-        cursor = conn.cursor()
-        cursor.execute(
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS registros_planta (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                st_desp INTEGER NOT NULL,
+                st_llen INTEGER NOT NULL,
+                st_etiq INTEGER NOT NULL,
+                st_encaj INTEGER NOT NULL,
+                st_palet INTEGER NOT NULL,
+                falla_etiq INTEGER NOT NULL,
+                falla_palet INTEGER NOT NULL,
+                cnt_desp INTEGER NOT NULL,
+                cnt_llen INTEGER NOT NULL,
+                cnt_palet INTEGER NOT NULL,
+                pulmon_1 INTEGER NOT NULL,
+                pulmon_2 INTEGER NOT NULL,
+                pulmon_3 INTEGER NOT NULL,
+                velocidad_bph INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_planta_timestamp
+            ON registros_planta (timestamp)
+            """
+        )
+        # Tabla legacy (pasos 1-4) se mantiene por compatibilidad si existiera
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS registros_produccion (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,36 +73,76 @@ def init_db() -> None:
             )
             """
         )
-        # Índice por fecha: acelera reportes del tipo "todo lo de hoy"
-        cursor.execute(
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def guardar_lectura_planta(
+    st_desp: bool,
+    st_llen: bool,
+    st_etiq: bool,
+    st_encaj: bool,
+    st_palet: bool,
+    falla_etiq: bool,
+    falla_palet: bool,
+    cnt_desp: int,
+    cnt_llen: int,
+    cnt_palet: int,
+    pulmon_1: int,
+    pulmon_2: int,
+    pulmon_3: int,
+    velocidad_bph: int,
+) -> None:
+    """Inserta una lectura completa de la planta."""
+    conn = _conectar()
+    try:
+        cur = conn.cursor()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute(
             """
-            CREATE INDEX IF NOT EXISTS idx_registros_timestamp
-            ON registros_produccion (timestamp)
-            """
+            INSERT INTO registros_planta (
+                timestamp,
+                st_desp, st_llen, st_etiq, st_encaj, st_palet,
+                falla_etiq, falla_palet,
+                cnt_desp, cnt_llen, cnt_palet,
+                pulmon_1, pulmon_2, pulmon_3,
+                velocidad_bph
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now,
+                int(bool(st_desp)),
+                int(bool(st_llen)),
+                int(bool(st_etiq)),
+                int(bool(st_encaj)),
+                int(bool(st_palet)),
+                int(bool(falla_etiq)),
+                int(bool(falla_palet)),
+                int(cnt_desp),
+                int(cnt_llen),
+                int(cnt_palet),
+                int(pulmon_1),
+                int(pulmon_2),
+                int(pulmon_3),
+                int(velocidad_bph),
+            ),
         )
         conn.commit()
     finally:
         conn.close()
 
 
-def guardar_lectura(
-    motor_encendido: bool,
-    contador_piezas: int,
-    alarma_activa: bool,
-) -> None:
+def guardar_lectura(motor_encendido: bool, contador_piezas: int, alarma_activa: bool) -> None:
     """
-    Inserta una lectura del PLC en la base de datos.
-
-    Parámetros:
-      motor_encendido  -> True si el motor está ON
-      contador_piezas  -> valor actual del contador Modbus
-      alarma_activa    -> True si hay alarma activa
+    Compatibilidad con el modelo simple (pasos 1-4).
+    Prefiere guardar_lectura_planta() con el modelo de 3 pulmones.
     """
     conn = _conectar()
     try:
-        cursor = conn.cursor()
+        cur = conn.cursor()
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute(
+        cur.execute(
             """
             INSERT INTO registros_produccion
                 (timestamp, motor_encendido, contador_piezas, alarma_activa)
@@ -107,41 +156,23 @@ def guardar_lectura(
 
 
 def reporte_produccion_dia(fecha: str | None = None) -> dict[str, Any]:
-    """
-    Genera un resumen de producción para un día concreto.
-
-    Args:
-      fecha: cadena 'YYYY-MM-DD'. Si es None, usa el día de hoy.
-
-    Returns:
-      Diccionario con totales útiles para un cierre de jornada, por ejemplo:
-        {
-          "fecha": "2026-09-20",
-          "total_lecturas": 120,
-          "piezas_inicial": 0,
-          "piezas_final": 45,
-          "piezas_producidas": 45,
-          "lecturas_con_alarma": 3,
-          "lecturas_motor_on": 80,
-        }
-    """
+    """Resumen diario a partir de registros_planta (contador llenadora)."""
     if fecha is None:
         fecha = datetime.now().strftime("%Y-%m-%d")
 
     conn = _conectar()
     try:
-        cursor = conn.cursor()
-        # Todas las lecturas cuyo timestamp empieza por la fecha pedida
-        cursor.execute(
+        cur = conn.cursor()
+        cur.execute(
             """
-            SELECT contador_piezas, motor_encendido, alarma_activa
-            FROM registros_produccion
+            SELECT cnt_llen, cnt_palet, pulmon_2, velocidad_bph, falla_etiq, falla_palet
+            FROM registros_planta
             WHERE timestamp LIKE ?
             ORDER BY id ASC
             """,
             (f"{fecha}%",),
         )
-        filas = cursor.fetchall()
+        filas = cur.fetchall()
     finally:
         conn.close()
 
@@ -152,54 +183,43 @@ def reporte_produccion_dia(fecha: str | None = None) -> dict[str, Any]:
             "piezas_inicial": None,
             "piezas_final": None,
             "piezas_producidas": 0,
-            "lecturas_con_alarma": 0,
-            "lecturas_motor_on": 0,
+            "pallets_final": None,
+            "lecturas_con_falla": 0,
         }
 
     piezas_inicial = int(filas[0][0])
     piezas_final = int(filas[-1][0])
-    # Si el contador Modbus hace overflow (65535 -> 0), el delta puede ser negativo;
-    # en ese caso informamos al menos el valor absoluto observado en el día.
     delta = piezas_final - piezas_inicial
-    piezas_producidas = delta if delta >= 0 else piezas_final
-
     return {
         "fecha": fecha,
         "total_lecturas": len(filas),
         "piezas_inicial": piezas_inicial,
         "piezas_final": piezas_final,
-        "piezas_producidas": piezas_producidas,
-        "lecturas_con_alarma": sum(1 for f in filas if f[2]),
-        "lecturas_motor_on": sum(1 for f in filas if f[1]),
+        "piezas_producidas": delta if delta >= 0 else piezas_final,
+        "pallets_final": int(filas[-1][1]),
+        "lecturas_con_falla": sum(1 for f in filas if f[4] or f[5]),
     }
 
 
 def contar_registros() -> int:
-    """Devuelve cuántas filas hay en la tabla (útil para pruebas rápidas)."""
     conn = _conectar()
     try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM registros_produccion")
-        return int(cursor.fetchone()[0])
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM registros_planta")
+        return int(cur.fetchone()[0])
     finally:
         conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Prueba manual rápida:
-#   python base_datos.py
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     print(f"Base de datos: {DB_PATH}")
     init_db()
-    print("Tabla registros_produccion lista.")
-
-    guardar_lectura(True, 10, False)
-    guardar_lectura(True, 11, False)
-    guardar_lectura(False, 11, True)
-    print(f"Registros totales: {contar_registros()}")
-
-    resumen = reporte_produccion_dia()
-    print("Reporte de hoy:")
-    for clave, valor in resumen.items():
-        print(f"  {clave}: {valor}")
+    guardar_lectura_planta(
+        True, True, True, True, True,
+        False, False,
+        10, 10, 1,
+        20, 15, 5,
+        2400,
+    )
+    print(f"Registros planta: {contar_registros()}")
+    print("Reporte:", reporte_produccion_dia())

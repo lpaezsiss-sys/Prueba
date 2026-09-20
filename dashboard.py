@@ -3,21 +3,15 @@
 """
 dashboard.py
 ------------
-Dashboard web en tiempo real (Streamlit) para la línea de embalaje.
+Dashboard Streamlit — planta completa con 3 pulmones.
 
-Muestra:
-  - Estado del motor (ON/OFF)
-  - Contador de piezas
-  - Alarma (paro prolongado)
-  - Botonera HMI (arranque / paro vía Modbus)
-  - Histórico y gráfica desde SQLite
+Muestra estados de máquinas, niveles de acumulación, contadores, BPH
+y permite inyectar fallas en etiquetadora / paletizadora (coils 10/11).
 
-Orden típico de arranque:
+Arranque:
   1) python servidor_simulado.py
-  2) python cliente_lectura.py   # llena embalaje.db
-  3) streamlit run dashboard.py  # este archivo
-
-Para el PLC Delta real: cambia solo PLC_IP y PLC_PORT (igual que el cliente).
+  2) python cliente_lectura.py
+  3) streamlit run dashboard.py
 """
 
 from __future__ import annotations
@@ -31,54 +25,72 @@ from pymodbus.client import ModbusTcpClient
 
 from base_datos import DB_PATH, init_db
 
-# ------------------------------------------------------------------------------
-# CONFIGURACIÓN DE LA PÁGINA Y MODBUS
-# ------------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Control Línea de Embalaje",
+    page_title="Planta Embalaje — 3 Pulmones",
     page_icon="🏭",
     layout="wide",
 )
 
-# Mismas variables que en cliente_lectura.py (cámbialas para el PLC real)
 PLC_IP = "127.0.0.1"
-PLC_PORT = 5020  # 5020 = simulador | 502 = PLC Delta típico
+PLC_PORT = 5020
 SLAVE_ID = 1
 
-# Asegura que la tabla exista aunque aún no hayas corrido el cliente
 init_db()
 
-# ------------------------------------------------------------------------------
-# FUNCIONES AUXILIARES (COMUNICACIÓN Y BASE DE DATOS)
-# ------------------------------------------------------------------------------
 
-
-def enviar_pulso_modbus(coil_address: int) -> bool:
-    """
-    Envía un pulso (escribe True) a un coil del PLC / simulador.
-
-    Coil 2: Botón Arranque | Coil 3: Botón Paro
-    El servidor simulado (o tu ladder en el Delta) interpreta el pulso y
-    resetea el bit; por eso no hace falta escribir False desde aquí.
-    """
+def escribir_coil(address: int, valor: bool) -> bool:
+    """Escribe un coil Modbus (fallas HMI)."""
     client = ModbusTcpClient(PLC_IP, port=PLC_PORT)
     try:
         if not client.connect():
             return False
-        result = client.write_coil(coil_address, True, slave=SLAVE_ID)
-        time.sleep(0.1)
-        return not result.isError()
+        r = client.write_coil(address, bool(valor), slave=SLAVE_ID)
+        return not r.isError()
     finally:
         client.close()
 
 
-def obtener_historial_db() -> pd.DataFrame:
-    """Obtiene los últimos 50 registros de la base de datos SQLite."""
+def leer_planta_modbus() -> dict | None:
+    """Lectura directa al PLC/simulador (fuente en vivo para el HMI)."""
+    client = ModbusTcpClient(PLC_IP, port=PLC_PORT)
+    try:
+        if not client.connect():
+            return None
+        coils = client.read_coils(0, 12, slave=SLAVE_ID)
+        regs = client.read_holding_registers(0, 21, slave=SLAVE_ID)
+        if coils.isError() or regs.isError():
+            return None
+        b, r = coils.bits, regs.registers
+        return {
+            "st_desp": bool(b[0]),
+            "st_llen": bool(b[1]),
+            "st_etiq": bool(b[2]),
+            "st_encaj": bool(b[3]),
+            "st_palet": bool(b[4]),
+            "falla_etiq": bool(b[10]),
+            "falla_palet": bool(b[11]),
+            "cnt_desp": int(r[0]),
+            "cnt_llen": int(r[1]),
+            "cnt_palet": int(r[2]),
+            "pulmon_1": int(r[10]),
+            "pulmon_2": int(r[11]),
+            "pulmon_3": int(r[12]),
+            "velocidad_bph": int(r[20]),
+        }
+    finally:
+        client.close()
+
+
+def obtener_historial_db(limit: int = 50) -> pd.DataFrame:
     try:
         conn = sqlite3.connect(DB_PATH)
         df = pd.read_sql_query(
-            "SELECT timestamp, motor_encendido, contador_piezas, alarma_activa "
-            "FROM registros_produccion ORDER BY id DESC LIMIT 50",
+            f"""
+            SELECT timestamp, st_llen, st_etiq, st_palet,
+                   cnt_llen, cnt_palet, pulmon_1, pulmon_2, pulmon_3, velocidad_bph
+            FROM registros_planta
+            ORDER BY id DESC LIMIT {int(limit)}
+            """,
             conn,
         )
         conn.close()
@@ -87,85 +99,104 @@ def obtener_historial_db() -> pd.DataFrame:
         return pd.DataFrame()
 
 
-# ------------------------------------------------------------------------------
-# INTERFAZ GRÁFICA (DASHBOARD)
-# ------------------------------------------------------------------------------
-st.title("🏭 Dashboard de Control - Línea de Embalaje Industrial")
-st.caption(f"Origen de datos: `{DB_PATH.name}` · Comandos Modbus → {PLC_IP}:{PLC_PORT}")
-st.markdown("---")
-
-df_historial = obtener_historial_db()
-
-if not df_historial.empty:
-    # El historial viene ORDER BY id DESC → la fila 0 es la más reciente
-    ultimo_registro = df_historial.iloc[0]
-    motor_on = bool(ultimo_registro["motor_encendido"])
-    piezas = int(ultimo_registro["contador_piezas"])
-    alarma_on = bool(ultimo_registro["alarma_activa"])
-else:
-    motor_on, piezas, alarma_on = False, 0, False
-
-# --- PANEL SUPERIOR: ESTADOS Y MÉTRICAS ---
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.subheader("Estado del Motor")
-    if motor_on:
-        st.success("🟢 MOTOR OPERANDO (ON)")
+def badge_maquina(nombre: str, on: bool) -> None:
+    if on:
+        st.success(f"{nombre}: ON")
     else:
-        st.error("🔴 MOTOR DETENIDO (OFF)")
+        st.error(f"{nombre}: OFF")
 
-with col2:
-    st.subheader("Producción Total")
-    st.metric(label="Piezas Procesadas", value=f"{piezas} pcs")
 
-with col3:
-    st.subheader("Sistema de Alarmas")
-    if alarma_on:
-        st.warning("⚠️ ALERTA: PARO PROLONGADO (>10s)")
+def barra_pulmon(nombre: str, nivel: int) -> None:
+    st.markdown(f"**{nombre}** — {nivel}%")
+    st.progress(min(100, max(0, int(nivel))) / 100.0)
+    if nivel >= 90:
+        st.warning("Saturación ≥ 90% (interlock activo)")
+
+
+# ------------------------------------------------------------------------------
+# UI
+# ------------------------------------------------------------------------------
+st.title("Dashboard — Línea completa (3 pulmones)")
+st.caption(f"Modbus {PLC_IP}:{PLC_PORT} · Histórico `{DB_PATH.name}`")
+st.markdown("---")
+
+estado = leer_planta_modbus()
+if estado is None:
+    st.error("Sin conexión Modbus. Arranca `python servidor_simulado.py`.")
+    time.sleep(1.5)
+    st.rerun()
+
+# --- Máquinas ---
+st.subheader("Estados de máquinas")
+c1, c2, c3, c4, c5 = st.columns(5)
+with c1:
+    badge_maquina("Despaletizador", estado["st_desp"])
+with c2:
+    badge_maquina("Llenadora", estado["st_llen"])
+with c3:
+    badge_maquina("Etiquetadora", estado["st_etiq"])
+with c4:
+    badge_maquina("Encajonadora", estado["st_encaj"])
+with c5:
+    badge_maquina("Paletizadora", estado["st_palet"])
+
+# --- KPIs ---
+k1, k2, k3 = st.columns(3)
+k1.metric("Contador llenadora", estado["cnt_llen"])
+k2.metric("Contador palets", estado["cnt_palet"])
+k3.metric("Velocidad BPH", estado["velocidad_bph"])
+
+st.markdown("---")
+
+# --- Pulmones ---
+st.subheader("Pulmones de acumulación")
+p1, p2, p3 = st.columns(3)
+with p1:
+    barra_pulmon("Pulmón 1 (pre-llenadora)", estado["pulmon_1"])
+with p2:
+    barra_pulmon("Pulmón 2 (pre-etiquetadora)", estado["pulmon_2"])
+with p3:
+    barra_pulmon("Pulmón 3 (pre-paletizadora)", estado["pulmon_3"])
+
+st.markdown("---")
+
+# --- Fallas HMI ---
+st.subheader("Simulación de fallas (escritura Modbus)")
+f1, f2 = st.columns(2)
+with f1:
+    if estado["falla_etiq"]:
+        if st.button("Recuperar Etiquetadora", use_container_width=True):
+            escribir_coil(10, False)
+            st.toast("falla_etiq = 0")
     else:
-        st.info("✅ SISTEMA NORMAL")
+        if st.button("Inyectar FALLA Etiquetadora", use_container_width=True):
+            escribir_coil(10, True)
+            st.toast("falla_etiq = 1 — observa cómo sube Pulmón 2")
+
+with f2:
+    if estado["falla_palet"]:
+        if st.button("Recuperar Paletizadora", use_container_width=True):
+            escribir_coil(11, False)
+            st.toast("falla_palet = 0")
+    else:
+        if st.button("Inyectar FALLA Paletizadora", use_container_width=True):
+            escribir_coil(11, True)
+            st.toast("falla_palet = 1 — observa cómo sube Pulmón 3")
 
 st.markdown("---")
 
-# --- PANEL INTERMEDIO: CONTROL MANUAL (BOTONERA HMI) ---
-st.subheader("🎛️ Control Manual de Planta")
-col_btn1, col_btn2, _ = st.columns([1, 1, 2])
-
-with col_btn1:
-    if st.button("🟢 ARRANCAR LÍNEA", use_container_width=True):
-        ok = enviar_pulso_modbus(coil_address=2)  # Coil 2 = Botón Arranque
-        if ok:
-            st.toast("Comando de ARRANQUE enviado al PLC", icon="✅")
-        else:
-            st.toast("No se pudo conectar al PLC/simulador", icon="⚠️")
-
-with col_btn2:
-    if st.button("🔴 PARAR LÍNEA", use_container_width=True):
-        ok = enviar_pulso_modbus(coil_address=3)  # Coil 3 = Botón Paro
-        if ok:
-            st.toast("Comando de PARO enviado al PLC", icon="🛑")
-        else:
-            st.toast("No se pudo conectar al PLC/simulador", icon="⚠️")
-
-st.markdown("---")
-
-# --- PANEL INFERIOR: HISTORIAL Y GRÁFICOS DE TENDENCIA ---
-st.subheader("📊 Histórico de Producción en Tiempo Real")
-
-if not df_historial.empty:
-    # Invertimos para que el eje X vaya de antiguo → reciente en la gráfica
-    df_chart = df_historial.iloc[::-1].copy()
-    st.line_chart(df_chart.set_index("timestamp")["contador_piezas"])
-
-    with st.expander("Ver tabla de últimos 50 registros"):
-        st.dataframe(df_historial, use_container_width=True)
-else:
-    st.info(
-        "Esperando primeros registros en la base de datos `embalaje.db`... "
-        "Arranca también `python cliente_lectura.py`."
+# --- Histórico ---
+st.subheader("Histórico (SQLite)")
+df = obtener_historial_db()
+if not df.empty:
+    chart_df = df.iloc[::-1].copy()
+    st.line_chart(
+        chart_df.set_index("timestamp")[["pulmon_1", "pulmon_2", "pulmon_3", "cnt_llen"]]
     )
+    with st.expander("Últimos registros"):
+        st.dataframe(df, use_container_width=True)
+else:
+    st.info("Sin histórico aún. Arranca también `python cliente_lectura.py`.")
 
-# Auto-refresh cada ~1.5 s (polling simple de Streamlit)
 time.sleep(1.5)
 st.rerun()
