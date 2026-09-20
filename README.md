@@ -17,7 +17,7 @@ Despaletizador → [Pulmón 1] → Llenadora → [Pulmón 2] → Etiquetadora
 | `servidor_simulado.py` | PLC virtual + lógica de balanceo / interlocks |
 | `cliente_lectura.py` | Lectura 1 s + consola + SQLite |
 | `base_datos.py` | Persistencia (`embalaje_completo.db` / `registros_planta`) |
-| `dashboard.py` | HMI Streamlit (estados, pulmones, fallas) |
+| `dashboard.py` | HMI SCADA Streamlit (sinóptico, gauges Plotly, fallas) |
 
 ## Mapa Modbus
 
