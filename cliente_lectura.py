@@ -3,10 +3,10 @@
 """
 cliente_lectura.py
 ------------------
-Cliente Modbus TCP para la planta completa (3 pulmones).
+Cliente Modbus TCP: captura periódica de la planta completa (3 pulmones).
 
-Lee cada 1 s estados, pulmones, contadores y BPH; imprime en consola
-y guarda en SQLite.
+Lee estados clave + pulmones + contadores, guarda en embalaje_completo.db
+e imprime un resumen en consola.
 
 Para el PLC Delta real: cambia solo PLC_IP / PLC_PORT / SLAVE_ID.
 """
@@ -19,89 +19,67 @@ from pymodbus.client import ModbusTcpClient
 
 from base_datos import init_db, guardar_lectura_completa
 
-# ==============================================================================
-# CONFIGURACIÓN DE CONEXIÓN (cambia esto para el PLC Delta físico)
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# CONFIGURACIÓN DE CONEXIÓN
+# Simulador: 127.0.0.1:5020 | PLC Delta típico: <IP_PLC>:502
+# ------------------------------------------------------------------------------
 PLC_IP = "127.0.0.1"
-PLC_PORT = 5020  # 5020 simulador | 502 PLC Delta típico
+PLC_PORT = 5020
 SLAVE_ID = 1
-INTERVALO_LECTURA_S = 1.0
 
 init_db()
 
 
-def _on_off(v: bool) -> str:
-    return "ON" if v else "--"
-
-
-def leer_plc() -> None:
+def ciclo_lectura() -> None:
+    """Conecta al PLC/simulador y registra lecturas cada 1 segundo."""
     client = ModbusTcpClient(PLC_IP, port=PLC_PORT)
-
-    print(f"[CLIENTE] Conectando a planta en {PLC_IP}:{PLC_PORT}...")
     if not client.connect():
-        print("[CLIENTE] Error: no hay conexión. ¿Corriste servidor_simulado.py?")
+        print("[ERROR] No se pudo conectar al PLC.")
+        print("[ERROR] ¿Está corriendo 'python servidor_simulado.py'?")
         return
 
-    print("[CLIENTE] Conexión OK. Lectura continua (Ctrl+C para detener).\n")
-    print(
-        f"{'TIMESTAMP':<19} | {'D':^3} {'L':^3} {'E':^3} {'C':^3} {'P':^3} | "
-        f"{'P1%':>4} {'P2%':>4} {'P3%':>4} | {'LLEN':>6} {'PAL':>5} | {'BPH':>5}"
-    )
-    print("-" * 78)
+    print(f"[CLIENTE] Capturando datos de planta completa en {PLC_IP}:{PLC_PORT}...")
+    print("[CLIENTE] Ctrl+C para detener.\n")
 
     try:
         while True:
-            res_coils = client.read_coils(address=0, count=12, slave=SLAVE_ID)
-            res_regs = client.read_holding_registers(address=0, count=21, slave=SLAVE_ID)
+            # Coils 0..4: estados de las 5 máquinas
+            res_coils = client.read_coils(address=0, count=5, slave=SLAVE_ID)
+            # HR 0..12: contadores (0-2) + pulmones (10-12)
+            res_regs = client.read_holding_registers(address=0, count=13, slave=SLAVE_ID)
 
-            if res_coils.isError() or res_regs.isError():
-                print("[CLIENTE] Error al leer Modbus.")
-            else:
-                bits = res_coils.bits
+            if not res_coils.isError() and not res_regs.isError():
+                coils = res_coils.bits
                 regs = res_regs.registers
 
-                st_desp = bool(bits[0])
-                st_llen = bool(bits[1])
-                st_etiq = bool(bits[2])
-                st_encaj = bool(bits[3])
-                st_palet = bool(bits[4])
-                falla_etiq = bool(bits[10])
-                falla_palet = bool(bits[11])
-
-                cnt_desp = int(regs[0])
-                cnt_llen = int(regs[1])
-                cnt_palet = int(regs[2])
+                # Desempaquetado (mapa alineado con servidor_simulado.py)
+                st_llen = bool(coils[1])   # Llenadora
+                st_etiq = bool(coils[2])   # Etiquetadora
+                st_palet = bool(coils[4])  # Paletizadora
                 p1, p2, p3 = int(regs[10]), int(regs[11]), int(regs[12])
-                bph = int(regs[20])
+                cnt_llen = int(regs[1])    # Contador llenadora
+                cnt_palet = int(regs[2])   # Contador paletizadora / cajas
 
-                ts = time.strftime("%Y-%m-%d %H:%M:%S")
-                print(
-                    f"{ts:<19} | "
-                    f"{_on_off(st_desp):^3} {_on_off(st_llen):^3} {_on_off(st_etiq):^3} "
-                    f"{_on_off(st_encaj):^3} {_on_off(st_palet):^3} | "
-                    f"{p1:>4} {p2:>4} {p3:>4} | {cnt_llen:>6} {cnt_palet:>5} | {bph:>5}"
-                )
-
-                # Persistencia (esquema embalaje_completo.db)
                 guardar_lectura_completa(
-                    st_llen,
-                    st_etiq,
-                    st_palet,
-                    p1,
-                    p2,
-                    p3,
-                    cnt_llen,
-                    cnt_palet,
+                    st_llen, st_etiq, st_palet, p1, p2, p3, cnt_llen, cnt_palet
                 )
+                print(
+                    f"[{time.strftime('%H:%M:%S')}] "
+                    f"Llenadora: {'ON' if st_llen else 'OFF'} | "
+                    f"Pulmón 2: {p2}% | "
+                    f"Cajas: {cnt_palet}"
+                )
+            else:
+                print("[CLIENTE] Error al leer registros Modbus.")
 
-            time.sleep(INTERVALO_LECTURA_S)
+            time.sleep(1)
 
     except KeyboardInterrupt:
-        print("\n[CLIENTE] Lectura detenida.")
+        print("\n[CLIENTE] Lectura detenida por el usuario.")
     finally:
         client.close()
         print("[CLIENTE] Conexión cerrada.")
 
 
 if __name__ == "__main__":
-    leer_plc()
+    ciclo_lectura()
