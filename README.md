@@ -11,7 +11,7 @@ simulamos el PLC con un servidor Modbus TCP en Python.
 | 1    | Servidor Modbus TCP     | `servidor_simulado.py`  | **Listo**     |
 | 2    | Cliente de lectura      | `cliente_lectura.py`    | Pendiente     |
 | 3    | Dashboard web           | `dashboard.py`          | Pendiente     |
-| 4    | Persistencia SQLite     | `base_datos.py`         | Pendiente     |
+| 4    | Persistencia SQLite     | `base_datos.py`         | **Listo**     |
 
 ---
 
@@ -131,8 +131,31 @@ En la terminal del servidor: `Ctrl+C`.
 
 ---
 
+## Paso 4 — Persistencia SQLite (`base_datos.py`)
+
+Guarda cada lectura (timestamp, motor, contador, alarma) en `embalaje.db`.
+No habla Modbus: solo recibe valores ya leídos. El futuro cliente lo usará así:
+
+```python
+from base_datos import init_db, guardar_lectura, reporte_produccion_dia
+
+init_db()
+guardar_lectura(motor_encendido=True, contador_piezas=12, alarma_activa=False)
+print(reporte_produccion_dia())  # resumen del día
+```
+
+Prueba aislada (sin servidor):
+
+```bash
+python base_datos.py
+```
+
+Se crea `embalaje.db` en la carpeta del proyecto (está en `.gitignore`).
+
+---
+
 ## Próximo paso (cuando confirmes)
 
 **Paso 2:** `cliente_lectura.py` — se conecta a este servidor, lee cada 1 s e
-imprime en consola. Estará pensado para que, con el PLC Delta real, solo
-cambies IP/puerto.
+imprime en consola (y podrá llamar a `guardar_lectura`). Estará pensado para
+que, con el PLC Delta real, solo cambies IP/puerto.
