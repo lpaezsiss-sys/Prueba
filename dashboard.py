@@ -55,35 +55,6 @@ st.markdown(
     h1, h2, h3, p, label, span, div { color: #e2e8f0 !important; }
     [data-testid="stMetricValue"] { color: #f8fafc !important; }
     [data-testid="stMetricLabel"] { color: #94a3b8 !important; }
-    .station-card {
-        border: 1px solid #334155;
-        border-radius: 12px;
-        padding: 0.85rem 0.7rem;
-        background: rgba(15, 23, 42, 0.85);
-        min-height: 140px;
-        text-align: center;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.25);
-    }
-    .station-card.critical {
-        border: 2px solid #38bdf8;
-        background: linear-gradient(180deg, rgba(14,165,233,0.18), rgba(15,23,42,0.9));
-    }
-    .station-title { font-weight: 700; font-size: 0.95rem; margin-bottom: 0.35rem; }
-    .station-sub { font-size: 0.75rem; color: #94a3b8 !important; margin-bottom: 0.55rem; }
-    .badge-on {
-        display: inline-block; padding: 0.25rem 0.7rem; border-radius: 999px;
-        background: #14532d; color: #86efac !important; font-weight: 700; font-size: 0.85rem;
-        border: 1px solid #22c55e;
-    }
-    .badge-off {
-        display: inline-block; padding: 0.25rem 0.7rem; border-radius: 999px;
-        background: #7f1d1d; color: #fecaca !important; font-weight: 700; font-size: 0.85rem;
-        border: 1px solid #ef4444;
-    }
-    .buffer-chip {
-        border: 1px dashed #64748b; border-radius: 10px; padding: 0.55rem 0.35rem;
-        text-align: center; background: rgba(30, 41, 59, 0.7); min-height: 140px;
-    }
     .status-operando {
         background: #14532d; border: 1px solid #22c55e; color: #bbf7d0 !important;
         padding: 0.55rem 1rem; border-radius: 10px; font-weight: 800; display: inline-block;
@@ -115,8 +86,10 @@ def leer_estado_modbus() -> dict[str, Any] | None:
         regs = client.read_holding_registers(0, 21, slave=SLAVE_ID)
         if coils.isError() or regs.isError():
             return None
-        b, r = coils.bits, regs.registers
+        b, r = list(coils.bits[:12]), list(regs.registers[:21])
         return {
+            "coils": b,
+            "registers": r,
             "st_desp": bool(b[0]),
             "st_llen": bool(b[1]),
             "st_etiq": bool(b[2]),
@@ -244,43 +217,293 @@ def gauge_pulmon(nombre: str, nivel: int) -> go.Figure:
     return fig
 
 
-def tarjeta_estacion(titulo: str, subtitulo: str, on: bool, critica: bool = False) -> None:
-    """Tarjeta visual de una estación del sinóptico."""
-    clase = "station-card critical" if critica else "station-card"
-    badge = (
-        '<span class="badge-on">🟢 ON</span>'
-        if on
-        else '<span class="badge-off">🔴 OFF / FALLA</span>'
-    )
-    st.markdown(
-        f"""
-        <div class="{clase}">
-          <div class="station-title">{titulo}</div>
-          <div class="station-sub">{subtitulo}</div>
-          {badge}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+def _estado_isa_estacion(
+    on: bool,
+    *,
+    falla: bool = False,
+    interlock: bool = False,
+) -> tuple[str, str, str]:
+    """
+    Devuelve (fill, border, etiqueta) según ISA-101 alto rendimiento.
+      ON        -> gris/verde suave
+      Interlock -> amarillo (bloqueo por pulmón)
+      Falla/OFF -> rojo (titila suavemente)
+    """
+    if on:
+        return "#86efac", "#166534", "ON"
+    if interlock and not falla:
+        return "#facc15", "#a16207", "INTERLOCK"
+    # Titileo rojo para falla/paro (alterna con el refresco SCADA)
+    if int(time.time() * 2) % 2 == 0:
+        return "#ef4444", "#991b1b", "FALLA" if falla else "OFF"
+    return "#7f1d1d", "#450a0a", "FALLA" if falla else "OFF"
 
 
-def chip_pulmon(nombre: str, nivel: int) -> None:
-    """Indicador compacto de pulmón entre estaciones."""
-    color = color_pulmon(nivel)
-    st.markdown(
-        f"""
-        <div class="buffer-chip">
-          <div style="font-size:0.72rem;color:#94a3b8!important;">{nombre}</div>
-          <div style="font-size:1.35rem;font-weight:800;color:{color}!important;margin:0.35rem 0;">
-            {int(nivel)}%
-          </div>
-          <div style="height:8px;background:#1e293b;border-radius:999px;overflow:hidden;">
-            <div style="width:{int(min(100,max(0,nivel)))}%;height:100%;background:{color};"></div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+def crear_grafico_mimico(coils: list, registers: list) -> go.Figure:
+    """
+    Diagrama mímico industrial interactivo (ISA-101) de la línea completa.
+
+    Flujo:
+      [Despaletizador]──(P1)──>[Llenadora]──(P2)──>[Etiquetadora]
+          ──>[Encajonadora]──(P3)──>[Paletizadora]
+    """
+    st_desp = bool(coils[0])
+    st_llen = bool(coils[1])
+    st_etiq = bool(coils[2])
+    st_encaj = bool(coils[3])
+    st_palet = bool(coils[4])
+    falla_etiq = bool(coils[10]) if len(coils) > 10 else False
+    falla_palet = bool(coils[11]) if len(coils) > 11 else False
+
+    p1 = int(registers[10]) if len(registers) > 10 else 0
+    p2 = int(registers[11]) if len(registers) > 11 else 0
+    p3 = int(registers[12]) if len(registers) > 12 else 0
+    p1 = max(0, min(100, p1))
+    p2 = max(0, min(100, p2))
+    p3 = max(0, min(100, p3))
+
+    # Clasificación OFF: falla vs interlock por saturación de pulmón aguas abajo
+    fill_d, border_d, tag_d = _estado_isa_estacion(
+        st_desp, interlock=(not st_desp and p1 >= 90)
     )
+    fill_l, border_l, tag_l = _estado_isa_estacion(
+        st_llen, interlock=(not st_llen and p2 >= 90)
+    )
+    fill_e, border_e, tag_e = _estado_isa_estacion(st_etiq, falla=falla_etiq)
+    fill_c, border_c, tag_c = _estado_isa_estacion(
+        st_encaj, interlock=(not st_encaj and p3 >= 90)
+    )
+    fill_p, border_p, tag_p = _estado_isa_estacion(st_palet, falla=falla_palet)
+
+    # Geometría del mímico (coordenadas normalizadas)
+    # Estaciones centradas en X; cinta a Y≈10; tanques de pulmón encima de la cinta
+    estaciones = [
+        {"name": "Despaletizador", "x": 8, "fill": fill_d, "border": border_d, "tag": tag_d, "critica": False},
+        {"name": "Llenadora", "x": 30, "fill": fill_l, "border": border_l, "tag": tag_l, "critica": True},
+        {"name": "Etiquetadora", "x": 52, "fill": fill_e, "border": border_e, "tag": tag_e, "critica": False},
+        {"name": "Encajonadora", "x": 70, "fill": fill_c, "border": border_c, "tag": tag_c, "critica": False},
+        {"name": "Paletizadora", "x": 90, "fill": fill_p, "border": border_p, "tag": tag_p, "critica": False},
+    ]
+    w_est, h_est, y_est = 10.5, 8.5, 7.0
+
+    # Segmentos de cinta: activo si la estación aguas arriba está ON
+    cintas = [
+        {"x0": 13.5, "x1": 24.5, "activo": st_desp},          # Desp -> P1/Llen
+        {"x0": 35.5, "x1": 46.5, "activo": st_llen},          # Llen -> P2/Etiq
+        {"x0": 57.5, "x1": 64.5, "activo": st_etiq},          # Etiq -> Encaj
+        {"x0": 75.5, "x1": 84.5, "activo": st_encaj},         # Encaj -> P3/Palet
+    ]
+
+    pulmones = [
+        {"label": "P1", "titulo": "Pulmón 1", "x": 19.0, "nivel": p1},
+        {"label": "P2", "titulo": "Pulmón 2", "x": 41.0, "nivel": p2},
+        {"label": "P3", "titulo": "Pulmón 3", "x": 80.0, "nivel": p3},
+    ]
+
+    shapes: list[dict[str, Any]] = []
+    annotations: list[dict[str, Any]] = []
+
+    # Base de cinta transportadora (riel)
+    shapes.append(
+        dict(
+            type="rect",
+            x0=5,
+            x1=96,
+            y0=9.6,
+            y1=11.0,
+            fillcolor="#1f2937",
+            line=dict(color="#374151", width=1),
+            layer="below",
+        )
+    )
+
+    for cinta in cintas:
+        color = "#38bdf8" if cinta["activo"] else "#4b5563"
+        width = 4 if cinta["activo"] else 2
+        shapes.append(
+            dict(
+                type="line",
+                x0=cinta["x0"],
+                x1=cinta["x1"],
+                y0=10.3,
+                y1=10.3,
+                line=dict(color=color, width=width),
+                layer="below",
+            )
+        )
+        # Punta de flecha simple
+        shapes.append(
+            dict(
+                type="path",
+                path=(
+                    f"M {cinta['x1']-1.2} {10.3 + 0.7} "
+                    f"L {cinta['x1']} {10.3} "
+                    f"L {cinta['x1']-1.2} {10.3 - 0.7} Z"
+                ),
+                fillcolor=color,
+                line=dict(color=color, width=0),
+                layer="below",
+            )
+        )
+
+    # Estaciones (bloques de proceso)
+    for est in estaciones:
+        x0 = est["x"] - w_est / 2
+        x1 = est["x"] + w_est / 2
+        y0, y1 = y_est, y_est + h_est
+        shapes.append(
+            dict(
+                type="rect",
+                x0=x0,
+                x1=x1,
+                y0=y0,
+                y1=y1,
+                fillcolor=est["fill"],
+                line=dict(
+                    color="#38bdf8" if est["critica"] else est["border"],
+                    width=4 if est["critica"] else 2,
+                ),
+                layer="above",
+            )
+        )
+        # Etiqueta de nombre
+        annotations.append(
+            dict(
+                x=est["x"],
+                y=y1 + 1.2,
+                text=f"<b>{est['name']}</b>"
+                + (" ★ CRÍTICA" if est["critica"] else ""),
+                showarrow=False,
+                font=dict(size=12, color="#e5e7eb"),
+                xanchor="center",
+            )
+        )
+        # Badge de estado
+        annotations.append(
+            dict(
+                x=est["x"],
+                y=y_est + h_est / 2,
+                text=f"<b>{est['tag']}</b>",
+                showarrow=False,
+                font=dict(size=13, color="#111827"),
+                xanchor="center",
+                yanchor="middle",
+            )
+        )
+
+    # Pulmones = tanques verticales con nivel dinámico
+    tank_w, tank_h, tank_y0 = 4.2, 10.0, 12.5
+    for pul in pulmones:
+        x0 = pul["x"] - tank_w / 2
+        x1 = pul["x"] + tank_w / 2
+        y0 = tank_y0
+        y1 = tank_y0 + tank_h
+        nivel = pul["nivel"]
+        fill_h = tank_h * (nivel / 100.0)
+        # Contorno del tanque
+        shapes.append(
+            dict(
+                type="rect",
+                x0=x0,
+                x1=x1,
+                y0=y0,
+                y1=y1,
+                fillcolor="#0b1220",
+                line=dict(color="#9ca3af", width=2),
+                layer="above",
+            )
+        )
+        # Nivel líquido
+        if fill_h > 0:
+            shapes.append(
+                dict(
+                    type="rect",
+                    x0=x0 + 0.15,
+                    x1=x1 - 0.15,
+                    y0=y0 + 0.15,
+                    y1=y0 + 0.15 + fill_h,
+                    fillcolor=color_pulmon(nivel),
+                    line=dict(width=0),
+                    layer="above",
+                )
+            )
+        # Etiqueta % encima del tanque
+        annotations.append(
+            dict(
+                x=pul["x"],
+                y=y1 + 1.0,
+                text=f"<b>{pul['label']} {nivel}%</b>",
+                showarrow=False,
+                font=dict(size=12, color=color_pulmon(nivel)),
+                xanchor="center",
+            )
+        )
+        annotations.append(
+            dict(
+                x=pul["x"],
+                y=y1 + 2.3,
+                text=pul["titulo"],
+                showarrow=False,
+                font=dict(size=10, color="#9ca3af"),
+                xanchor="center",
+            )
+        )
+
+    # Leyenda ISA-101 compacta
+    annotations.append(
+        dict(
+            x=50,
+            y=1.2,
+            text=(
+                "<b>ISA-101</b> &nbsp; "
+                "Verde/gris = ON &nbsp;|&nbsp; "
+                "Amarillo = Interlock (pulmón) &nbsp;|&nbsp; "
+                "Rojo = Falla/Paro &nbsp;|&nbsp; "
+                "Cinta azul = flujo activo"
+            ),
+            showarrow=False,
+            font=dict(size=11, color="#9ca3af"),
+            xanchor="center",
+        )
+    )
+
+    fig = go.Figure()
+    # Trace invisible para fijar el viewport
+    fig.add_trace(
+        go.Scatter(
+            x=[0, 100],
+            y=[0, 28],
+            mode="markers",
+            marker=dict(size=1, opacity=0),
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    fig.update_layout(
+        shapes=shapes,
+        annotations=annotations,
+        height=420,
+        margin=dict(l=10, r=10, t=20, b=10),
+        paper_bgcolor="#111827",
+        plot_bgcolor="#1e1e1e",
+        font=dict(color="#e5e7eb"),
+        xaxis=dict(
+            range=[0, 100],
+            visible=False,
+            showgrid=False,
+            zeroline=False,
+            fixedrange=True,
+        ),
+        yaxis=dict(
+            range=[0, 28],
+            visible=False,
+            showgrid=False,
+            zeroline=False,
+            fixedrange=True,
+        ),
+        dragmode=False,
+    )
+    return fig
 
 
 # =============================================================================
@@ -365,33 +588,14 @@ st.markdown("---")
 
 
 # =============================================================================
-# 2) LAYOUT SINÓPTICO DE PLANTA
+# 2) DIAGRAMA MÍMICO INDUSTRIAL (ISA-101)
 # =============================================================================
-st.subheader("Sinóptico de planta — flujo de 5 estaciones")
-
-desp, p1c, llen, p2c, etiq, encaj, p3c, palet = st.columns([2, 1.1, 2.2, 1.1, 2, 2, 1.1, 2])
-
-with desp:
-    tarjeta_estacion("1. Despaletizado", "Entrada de envases", estado["st_desp"])
-with p1c:
-    chip_pulmon("Pulmón 1", estado["pulmon_1"])
-with llen:
-    tarjeta_estacion(
-        "2. Lavadora / Llenadora",
-        "MÁQUINA CRÍTICA",
-        estado["st_llen"],
-        critica=True,
-    )
-with p2c:
-    chip_pulmon("Pulmón 2", estado["pulmon_2"])
-with etiq:
-    tarjeta_estacion("3. Etiquetadora", "Identificación", estado["st_etiq"])
-with encaj:
-    tarjeta_estacion("4. Encajonadora", "Formación de cajas", estado["st_encaj"])
-with p3c:
-    chip_pulmon("Pulmón 3", estado["pulmon_3"])
-with palet:
-    tarjeta_estacion("5. Paletizadora", "Salida de pallets", estado["st_palet"])
+st.subheader("Diagrama mímico de planta — flujo continuo")
+st.plotly_chart(
+    crear_grafico_mimico(estado["coils"], estado["registers"]),
+    use_container_width=True,
+    config={"displayModeBar": False, "staticPlot": False},
+)
 
 st.markdown("---")
 
