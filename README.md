@@ -17,7 +17,8 @@ Despaletizador → [Pulmón 1] → Llenadora → [Pulmón 2] → Etiquetadora
 | `servidor_simulado.py` | PLC virtual + lógica de balanceo / interlocks |
 | `cliente_lectura.py` | Lectura 1 s + consola + SQLite |
 | `base_datos.py` | Persistencia (`embalaje_completo.db` / `registros_planta`) |
-| `dashboard.py` | HMI SCADA Streamlit (sinóptico, gauges Plotly, fallas) |
+| `dashboard.py` | HMI SCADA Streamlit (mímico ISA-101, gauges, fallas) |
+| `generar_informe_pdf.py` | Informe técnico PDF (métricas DB + Ladder Delta) |
 
 ## Mapa Modbus
 
@@ -71,10 +72,20 @@ Abre `http://localhost:8501`.
 
 ### Experimento recomendado
 
-1. En el dashboard, pulsa **Inyectar FALLA Etiquetadora**
-2. Observa cómo **Pulmón 2** sube y la **Llenadora** se para al llegar a ≥90%
+1. En el dashboard (sidebar), pulsa **Simular Paro por Cambio de Rollo en Etiquetadora**
+2. Observa cómo **Pulmón 2** sube y la **Llenadora** se para al llegar a ≥85–90%
 3. Luego **Pulmón 1** satura y frena el **Despaletizador**
-4. Pulsa **Recuperar Etiquetadora** y mira cómo se vacían los pulmones
+4. Pulsa **Restablecer Planta** y mira cómo se vacían los pulmones
+
+### Informe técnico PDF
+
+Con datos en `embalaje_completo.db`:
+
+```bash
+python generar_informe_pdf.py
+```
+
+Genera `Informe_Tecnico_SCADA_PLC_Delta.pdf` (métricas SCADA, mapa M/D Delta y rungs Ladder).
 
 ## PLC Delta real
 

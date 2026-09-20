@@ -9,6 +9,10 @@ embalaje_completo.db
 *.db
 *.db-journal
 
+# Informes PDF generados
+Informe_Tecnico_SCADA_PLC_Delta.pdf
+*.pdf
+
 # Python
 __pycache__/
 *.py[cod]
