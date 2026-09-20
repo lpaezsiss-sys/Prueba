@@ -9,7 +9,7 @@ simulamos el PLC con un servidor Modbus TCP en Python.
 | Paso | Componente              | Archivo                 | Estado        |
 |------|-------------------------|-------------------------|---------------|
 | 1    | Servidor Modbus TCP     | `servidor_simulado.py`  | **Listo**     |
-| 2    | Cliente de lectura      | `cliente_lectura.py`    | Pendiente     |
+| 2    | Cliente de lectura      | `cliente_lectura.py`    | **Listo**     |
 | 3    | Dashboard web           | `dashboard.py`          | Pendiente     |
 | 4    | Persistencia SQLite     | `base_datos.py`         | **Listo**     |
 
@@ -131,6 +131,44 @@ En la terminal del servidor: `Ctrl+C`.
 
 ---
 
+## Paso 2 — Cliente de lectura (`cliente_lectura.py`)
+
+Lee el PLC/simulador cada 1 s, imprime en consola y guarda en SQLite.
+
+### Orden de arranque
+
+```bash
+# Terminal 1 — servidor simulado
+python servidor_simulado.py
+
+# Terminal 2 — cliente
+python cliente_lectura.py
+```
+
+Salida esperada:
+
+```text
+TIMESTAMP            | MOTOR    | ALARMA   | PIEZAS
+-------------------------------------------------------
+2026-09-20 13:30:01  | OFF      | ALERTA   | 2
+```
+
+### Cambio para PLC Delta real
+
+En `cliente_lectura.py` solo modifica:
+
+```python
+PLC_IP = "192.168.1.XX"  # IP del PLC
+PLC_PORT = 502           # Puerto Modbus TCP del Delta
+SLAVE_ID = 1             # Si tu PLC usa otro unit id
+```
+
+El resto de la lógica (lectura, print, `guardar_lectura`) no se reescribe.
+
+Detener el cliente: `Ctrl+C`.
+
+---
+
 ## Paso 4 — Persistencia SQLite (`base_datos.py`)
 
 Guarda cada lectura (timestamp, motor, contador, alarma) en `embalaje.db`.
@@ -156,6 +194,4 @@ Se crea `embalaje.db` en la carpeta del proyecto (está en `.gitignore`).
 
 ## Próximo paso (cuando confirmes)
 
-**Paso 2:** `cliente_lectura.py` — se conecta a este servidor, lee cada 1 s e
-imprime en consola (y podrá llamar a `guardar_lectura`). Estará pensado para
-que, con el PLC Delta real, solo cambies IP/puerto.
+**Paso 3:** `dashboard.py` — panel web en tiempo real (motor, piezas, alarma).
